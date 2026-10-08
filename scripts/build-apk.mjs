@@ -16,6 +16,9 @@
  *
  *   npm run build:apk              # build (or rebuild) oka-warehouse.apk
  *   npm run build:apk -- --clean   # regenerate the Android project first
+ *   npm run build:apk -- --dev     # the development app (oka-warehouse-dev.apk):
+ *                                  # install once, then code hot-reloads from
+ *                                  # `npm run dev:phone` over the tunnel or USB
  */
 
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
@@ -27,8 +30,15 @@ import { fileURLToPath } from 'node:url';
 import { loadEnv } from './live-common.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const OUT = path.join(ROOT, 'oka-warehouse.apk');
-const CLEAN = process.argv.includes('--clean');
+// --dev: the development app — loads JavaScript live from the dev server
+// (npm run dev:phone), so code changes hot-reload on the phone without a rebuild.
+const DEV = process.argv.includes('--dev');
+const VARIANT = DEV ? 'dev' : 'release';
+const OUT = path.join(ROOT, DEV ? 'oka-warehouse-dev.apk' : 'oka-warehouse.apk');
+const VARIANT_FILE = path.join(ROOT, 'android', '.oka-variant');
+// The Android project is generated per variant (package name differs): switching regenerates it.
+const lastVariant = existsSync(VARIANT_FILE) ? readFileSync(VARIANT_FILE, 'utf8').trim() : null;
+const CLEAN = process.argv.includes('--clean') || (existsSync(path.join(ROOT, 'android')) && lastVariant !== VARIANT);
 // Both ARM flavours: some 64-bit phones of that era run a 32-bit Android.
 const ABIS = 'armeabi-v7a,arm64-v8a';
 const REPO = 'https://dl.google.com/android/repository';
@@ -203,7 +213,7 @@ step(3, 'Generating the Android project from app.config.js');
 const pkgPath = path.join(ROOT, 'package.json');
 const pkgBefore = readFileSync(pkgPath, 'utf8');
 // The keys reach app.config.js (and so the APK) through the environment.
-const buildEnv = { ...sdkEnv, ...loaded.env, CI: '1' };
+const buildEnv = { ...sdkEnv, ...loaded.env, CI: '1', ...(DEV ? { APP_VARIANT: 'dev' } : {}) };
 try {
   await run('npx', ['expo', 'prebuild', '--platform', 'android', '--no-install', ...(CLEAN ? ['--clean'] : [])], {
     cwd: ROOT,
@@ -216,15 +226,17 @@ try {
   if (readFileSync(pkgPath, 'utf8') !== pkgBefore) writeFileSync(pkgPath, pkgBefore);
 }
 writeFileSync(path.join(ROOT, 'android', 'local.properties'), `sdk.dir=${SDK}\n`);
+writeFileSync(VARIANT_FILE, VARIANT);
 
 // ── 4. Build ─────────────────────────────────────────────────────────────────
-step(4, `Building the APK (${ABIS}) — the first build takes a while`);
+step(4, `Building the ${DEV ? 'development ' : ''}APK (${ABIS}) — the first build takes a while`);
 const started = Date.now();
 try {
   await run(
     './gradlew',
     [
-      'assembleRelease',
+      // Debug = the development app: no JavaScript inside, it loads it from the dev server.
+      DEV ? 'assembleDebug' : 'assembleRelease',
       `-PreactNativeArchitectures=${ABIS}`,
       '-Dorg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8',
       '--console=plain',
@@ -240,7 +252,9 @@ try {
 
 // ── 5. Output ────────────────────────────────────────────────────────────────
 step(5, 'Collecting the APK');
-const built = path.join(ROOT, 'android', 'app', 'build', 'outputs', 'apk', 'release', 'app-release.apk');
+const built = DEV
+  ? path.join(ROOT, 'android', 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk')
+  : path.join(ROOT, 'android', 'app', 'build', 'outputs', 'apk', 'release', 'app-release.apk');
 if (!existsSync(built)) fail(`the build finished but ${path.relative(ROOT, built)} is missing.`);
 copyFileSync(built, OUT);
 const mb = (statSync(OUT).size / 1024 / 1024).toFixed(1);
@@ -250,15 +264,24 @@ console.log(green(`  ${path.relative(ROOT, OUT)} — ${mb} MB, built in ${Math.r
 step(6, 'Installing it on the phone over USB');
 console.log(
   [
-    `  1. In the Codespace's file list (left), right-click ${bold('oka-warehouse.apk')} → ${bold('Download')}.`,
+    `  1. In the Codespace's file list (left), right-click ${bold(path.basename(OUT))} → ${bold('Download')}.`,
     '  2. Plug the phone into the computer with USB. On the phone, pull down the notification',
     `     and choose ${bold('Transfer files')} (also called File transfer / MTP).`,
-    "  3. On the computer, open the phone's storage and copy oka-warehouse.apk into its Download folder.",
-    `  4. On the phone, open ${bold('Files')} → Download → tap oka-warehouse.apk → ${bold('Install')}.`,
+    `  3. On the computer, open the phone's storage and copy ${path.basename(OUT)} into its Download folder.`,
+    `  4. On the phone, open ${bold('Files')} → Download → tap ${path.basename(OUT)} → ${bold('Install')}.`,
     `     If it says installation is blocked, tap Settings, turn on ${bold('Unknown sources')}, go back and tap the file again.`,
-    '  5. Open OKA Warehouse. Allow the camera when it asks (for scanning).',
-    '',
-    '  To update later: run npm run build:apk again and install the new file over the old one.',
+    ...(DEV
+      ? [
+          `  5. In the Codespace run ${bold('npm run dev:phone')}, then scan its QR code with the phone camera`,
+          `     (or, over USB, follow its USB steps). OKA WH Dev opens and loads the app; every save reloads it.`,
+          '',
+          '  Rebuild this only when native parts change (new native packages, app.config.js permissions).',
+        ]
+      : [
+          '  5. Open OKA Warehouse. Allow the camera when it asks (for scanning).',
+          '',
+          '  To update later: run npm run build:apk again and install the new file over the old one.',
+        ]),
     '',
   ].join('\n'),
 );

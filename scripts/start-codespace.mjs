@@ -18,6 +18,11 @@
  * libraries a Codespace lacks), and in that mode Expo prints no QR code of its
  * own — this script prints it.
  *
+ * `npm run dev:phone` (`-- --dev`) serves the development app OKA WH Dev
+ * instead of Expo Go: same tunnels, and a QR code holding the app's own link.
+ * `npm run dev:usb` (`-- --usb`) skips the tunnel and serves it through the USB
+ * cable via `adb reverse` on the computer the phone is plugged into.
+ *
  * `-- --github` tries GitHub's forwarded address first
  * (https://<codespace>-8081.app.github.dev, made public), then the tunnels.
  */
@@ -32,8 +37,18 @@ const GITHUB_WAIT_MS = 45_000;
 const TUNNEL_WAIT_MS = 90_000;
 const CLOUDFLARE_WAIT_MS = 90_000;
 
-const OWN_FLAGS = ['--tunnel', '--github', '--ngrok', '--cloudflare'];
+const OWN_FLAGS = ['--tunnel', '--github', '--ngrok', '--cloudflare', '--dev', '--usb'];
 const tryGithub = process.argv.includes('--github');
+/**
+ * --dev: serve the development app (OKA WH Dev, `npm run build:apk -- --dev`)
+ * instead of Expo Go. --usb: no tunnel — the phone reaches the server through
+ * the USB cable (`adb reverse`) via the computer it's plugged into.
+ */
+const DEV_CLIENT = process.argv.includes('--dev') || process.argv.includes('--usb');
+const USB = process.argv.includes('--usb');
+const DEV_SCHEME = 'okawhdev';
+/** The link that opens the dev app on a given server: what the QR code holds. */
+const devAppLink = (base) => `${DEV_SCHEME}://expo-development-client/?url=${encodeURIComponent(base)}`;
 const passthrough = process.argv.slice(2).filter((a) => !OWN_FLAGS.includes(a));
 const codespace = process.env.CODESPACE_NAME;
 
@@ -63,7 +78,15 @@ let attached = false;
 let userQuit = false;
 
 function startExpo(extraEnv, extraArgs) {
-  const env = { ...process.env, EXPO_UNSTABLE_HEADLESS: '1', ...extraEnv };
+  const env = {
+    ...process.env,
+    EXPO_UNSTABLE_HEADLESS: '1',
+    ...(DEV_CLIENT ? { APP_VARIANT: 'dev' } : {}),
+    ...extraEnv,
+  };
+  // expo-dev-client is installed, which makes Expo default to dev-client mode;
+  // say which one explicitly.
+  extraArgs = [...extraArgs, DEV_CLIENT ? '--dev-client' : '--go'];
   // Spawned directly (not through npx) so stopping it stops Metro too.
   child = spawn(process.execPath, [expoCli, 'start', '--port', String(PORT), ...extraArgs, ...passthrough], {
     stdio: 'inherit',
@@ -486,15 +509,62 @@ async function runTunnels() {
 // ── Output ───────────────────────────────────────────────────────────────────
 
 function printReady(expoGoUrl, checkUrl) {
+  // For the dev app the QR holds its own link (okawhdev://…?url=https://host).
+  const link = DEV_CLIENT ? devAppLink(checkUrl.replace(/\/status$/, '')) : expoGoUrl;
   console.log('');
-  printQr(expoGoUrl);
+  printQr(link);
   console.log(
     [
-      green(bold('Ready for Expo Go.')),
-      `  Scan the QR code above with the iPhone Camera, or open this address on the phone:`,
-      `  ${bold(expoGoUrl)}`,
-      `  Use this code, not Expo Go's "Recently opened" list — the address can change between runs.`,
-      `  Phone check: ${checkUrl} in Safari should say packager-status:running`,
+      green(bold(DEV_CLIENT ? 'Ready for OKA WH Dev.' : 'Ready for Expo Go.')),
+      DEV_CLIENT
+        ? '  Scan the QR code above with the phone camera (or a QR app) — it opens OKA WH Dev on this server.'
+        : `  Scan the QR code above with the iPhone Camera, or open this address on the phone:`,
+      `  ${bold(link)}`,
+      DEV_CLIENT
+        ? `  Or in OKA WH Dev tap "Enter URL manually" and type: ${checkUrl.replace(/\/status$/, '')}`
+        : `  Use this code, not Expo Go's "Recently opened" list — the address can change between runs.`,
+      `  Phone check: ${checkUrl} in the browser should say packager-status:running`,
+      DEV_CLIENT ? '  Every save in the Codespace reloads the app on the phone. Shake the phone for the dev menu.' : '',
+      '',
+    ].join('\n'),
+  );
+}
+
+// ── USB: the phone reaches the server through the cable ─────────────────────
+
+/**
+ * No tunnel: Metro listens on localhost:8081 and the phone gets there over
+ * USB — `adb reverse tcp:8081 tcp:8081` maps the phone's port 8081 to the
+ * computer's, and the computer's port 8081 is the Codespace's (VS Code desktop
+ * forwards it on its own; otherwise `gh codespace ports forward 8081:8081`).
+ * scripts/usb/connect-phone.cmd (Windows) / connect-phone.sh do the phone side.
+ */
+async function runUsb() {
+  console.log(bold('Starting the app server for USB (no tunnel)…'));
+  startExpo({}, ['--localhost']);
+  if (!(await metroRunning())) return;
+  await warmBundles();
+  attached = true;
+  const local = `http://localhost:${PORT}`;
+  console.log(
+    [
+      '',
+      green(bold('Ready for OKA WH Dev over USB.')),
+      '',
+      `  ${bold('1. Bring port ' + PORT + ' to the computer the phone is plugged into')}`,
+      '     • VS Code desktop connected to this Codespace does it on its own (PORTS tab shows 8081).',
+      `     • Otherwise, on that computer: gh codespace ports forward ${PORT}:${PORT}${codespace ? ` -c ${codespace}` : ''}`,
+      `     Check: ${local}/status in the computer's browser says packager-status:running`,
+      '',
+      `  ${bold('2. Connect the phone')} (USB debugging on — see README "USB hot reload")`,
+      '     Windows: double-click scripts\\usb\\connect-phone.cmd (download it from the Codespace first).',
+      '     Mac/Linux: sh connect-phone.sh',
+      '     It runs adb reverse and opens OKA WH Dev on this server. By hand:',
+      `       adb reverse tcp:${PORT} tcp:${PORT}`,
+      `       adb shell am start -a android.intent.action.VIEW -d "${devAppLink(local)}"`,
+      '',
+      '  Every save in the Codespace reloads the app on the phone. Shake the phone for the dev menu.',
+      '  If the cable is unplugged, plug it back in and run connect-phone again.',
       '',
     ].join('\n'),
   );
@@ -514,7 +584,9 @@ function printQr(url) {
 // ── Run ──────────────────────────────────────────────────────────────────────
 
 await freePort();
-if (codespace && tryGithub) {
+if (USB) {
+  await runUsb();
+} else if (codespace && tryGithub) {
   // True means GitHub's address works and is being watched.
   if (!(await runGithub())) {
     await stopExpo();

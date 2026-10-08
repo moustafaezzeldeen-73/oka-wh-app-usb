@@ -1,5 +1,11 @@
 # OKA Warehouse
 
+> **This repo is the USB hot-reload version** of [oka-wh-app](https://github.com/moustafaezzeldeen-73/oka-wh-app).
+> It adds **OKA WH Dev**, a development build that installs on the Huawei
+> nova plus (Android 7.0) over USB and loads the app's code live from the
+> Codespace. Every save reloads the phone, with no rebuilds and no Expo Go.
+> See [USB hot reload](#usb-hot-reload-oka-wh-dev).
+
 Warehouse app for OKA Egypt, built with Expo SDK 57 (React Native 0.86) and
 testable in Expo Go on Android and iPhone.
 It is a faithful implementation of the OKA Warehouse design, wired end to end to
@@ -168,6 +174,56 @@ React Native from preparing its desktop DevTools window — that needs GUI
 libraries a Codespace doesn't have (`libatk-1.0.so.0`). In that mode Expo
 prints no QR code or keyboard shortcuts of its own; the script prints the QR
 code.
+
+### USB hot reload (OKA WH Dev)
+
+The development app **OKA WH Dev** (`com.okaegypt.warehouse.dev`) has no
+JavaScript inside. It loads it from the dev server in the Codespace and reloads
+on every save. It installs next to the normal OKA Warehouse app. Build it once,
+and again only when native parts change (new native packages, permissions in
+`app.config.js`).
+
+**1. Build and install it (once)**
+```bash
+npm run build:apk -- --dev     # → oka-warehouse-dev.apk (first build 15–40 min)
+```
+Download `oka-warehouse-dev.apk` and `scripts/usb/connect-phone.cmd` from the
+Codespace (right-click → Download), and keep them in the same folder.
+
+**2. Phone setup (once, Huawei EMUI 5)**
+1. Settings → About phone → tap **Build number** 7 times.
+2. Settings → System → **Developer options**: turn on **USB debugging** (and
+   **Allow ADB debugging in charge only mode** if shown).
+3. Plug it into the computer; tap **Allow** on the "Allow USB debugging?"
+   prompt.
+
+**3. Each session**
+```bash
+npm run dev:usb                # in the Codespace: dev server, no tunnel
+```
+- **Bring port 8081 to the computer.** Opening the Codespace in VS Code
+  desktop forwards it automatically. Otherwise run `gh codespace ports forward
+  8081:8081` on the computer. Check that `http://localhost:8081/status` in the
+  computer's browser shows `packager-status:running`.
+- **First time:** drag `oka-warehouse-dev.apk` onto `connect-phone.cmd` to
+  install it and connect.
+- **After that:** double-click `connect-phone.cmd`. It runs `adb reverse
+  tcp:8081 tcp:8081` and opens OKA WH Dev on the server. adb is downloaded
+  once into `%LOCALAPPDATA%\oka-platform-tools`, with no admin rights.
+  Mac/Linux: `sh connect-phone.sh [apk]`.
+
+Edits in the Codespace now reload on the phone in seconds. Shake the phone for
+the dev menu (reload, performance monitor). If the cable is unplugged, plug it
+back in and run `connect-phone` again.
+
+**No cable or no PC handy?** `npm run dev:phone` serves the same dev app over
+the tunnel (ngrok, falling back to Cloudflare). Scan its QR code with the phone
+camera, or type the printed `https://…` address under "Enter URL manually" in
+OKA WH Dev.
+
+`npm run start:codespace` still serves Expo Go. Since `expo-dev-client` is
+installed, Expo would otherwise default to dev-client mode, so the script asks
+for `--go` explicitly.
 
 ### A phone that can't run Expo Go (install over USB)
 

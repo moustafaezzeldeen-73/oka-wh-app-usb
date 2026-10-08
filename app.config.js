@@ -5,17 +5,22 @@
  * `EXPO_PUBLIC_*` ones the bundler injects. Credentials are forwarded to the app
  * through `extra`, and read at runtime via `expo-constants` (see src/api/config.ts).
  */
+// APP_VARIANT=dev builds the development app (`npm run build:apk -- --dev`):
+// it loads JavaScript live from the dev server, so saves hot-reload on the
+// phone. Its own name, package and link scheme let it sit next to the normal app.
+const DEV = process.env.APP_VARIANT === 'dev';
+
 module.exports = ({ config }) => ({
   ...config,
-  name: 'OKA Warehouse',
+  name: DEV ? 'OKA WH Dev' : 'OKA Warehouse',
   slug: 'oka-wh-app',
   version: '1.0.0',
   orientation: 'portrait',
-  scheme: 'okawh',
+  scheme: DEV ? 'okawhdev' : 'okawh',
   userInterfaceStyle: 'light',
   assetBundlePatterns: ['**/*'],
   android: {
-    package: 'com.okaegypt.warehouse',
+    package: DEV ? 'com.okaegypt.warehouse.dev' : 'com.okaegypt.warehouse',
     adaptiveIcon: { backgroundColor: '#0F9D58' },
     permissions: ['CAMERA', 'INTERNET', 'VIBRATE'],
     // The media library plugin always asks for these; the app only reads the
